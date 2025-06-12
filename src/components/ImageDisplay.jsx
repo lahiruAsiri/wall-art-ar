@@ -1,11 +1,13 @@
 "use client"
 
 import React, { useState } from "react"
-import { Card, CardMedia, CardContent, CardActions, Typography, Box, Chip } from "@mui/material"
+import { Card, CardMedia, CardContent, CardActions, Typography, Box, Chip, Alert } from "@mui/material"
+import { CameraAlt, PhoneAndroid } from "@mui/icons-material"
 import ARButton from "./ARButton"
 
 const ImageDisplay = () => {
   const [isARSupported, setIsARSupported] = useState(false)
+  const [deviceInfo, setDeviceInfo] = useState("")
 
   // Hardcoded wall art image with frame
   const wallArtData = {
@@ -18,22 +20,32 @@ const ImageDisplay = () => {
   }
 
   React.useEffect(() => {
-    // Check AR support
+    // Check AR support and device info
     const checkARSupport = async () => {
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+      const hasCamera = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
+
+      if (isMobile && hasCamera) {
+        setIsARSupported(true)
+        setDeviceInfo("✅ AR Ready - Mobile device with camera detected")
+      } else if (!isMobile) {
+        setIsARSupported(false)
+        setDeviceInfo("📱 AR works best on mobile devices")
+      } else if (!hasCamera) {
+        setIsARSupported(false)
+        setDeviceInfo("📷 Camera not available")
+      }
+
+      // Check for WebXR support (advanced AR)
       if ("xr" in navigator) {
         try {
           const supported = await navigator.xr.isSessionSupported("immersive-ar")
-          setIsARSupported(supported)
+          if (supported) {
+            setDeviceInfo("🚀 Advanced AR supported (WebXR)")
+          }
         } catch (error) {
-          console.log("WebXR not supported:", error)
-          // Check for iOS AR Quick Look support
-          const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
-          setIsARSupported(isIOS)
+          console.log("WebXR check failed:", error)
         }
-      } else {
-        // Fallback: assume mobile devices can support AR
-        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
-        setIsARSupported(isMobile)
       }
     }
 
@@ -60,12 +72,22 @@ const ImageDisplay = () => {
             </Typography>
             <Chip label={wallArtData.size} variant="outlined" />
           </Box>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" color="text.secondary" gutterBottom>
             Frame Color: {wallArtData.frameColor}
           </Typography>
+
+          {/* Device Status */}
+          <Alert
+            severity={isARSupported ? "success" : "info"}
+            icon={isARSupported ? <CameraAlt /> : <PhoneAndroid />}
+            sx={{ mt: 2 }}
+          >
+            {deviceInfo}
+          </Alert>
+
           {!isARSupported && (
-            <Typography variant="caption" color="warning.main" sx={{ mt: 1, display: "block" }}>
-              AR feature works best on mobile devices
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
+              💡 For the best AR experience, open this page on your mobile phone
             </Typography>
           )}
         </CardContent>
@@ -78,3 +100,5 @@ const ImageDisplay = () => {
 }
 
 export default ImageDisplay
+
+
