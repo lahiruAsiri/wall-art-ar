@@ -5,8 +5,8 @@ import react from "@vitejs/plugin-react"
 export default defineConfig({
   plugins: [react()],
   server: {
-    https: true, // Required for WebXR
-    host: true,
+    https: true, // Required for camera access
+    host: "0.0.0.0", // Allow external connections
     port: 3000,
   },
   build: {
@@ -14,7 +14,7 @@ export default defineConfig({
       output: {
         manualChunks: {
           vendor: ["react", "react-dom"],
-          three: ["three", "@react-three/fiber", "@react-three/drei"],
+          three: ["three"],
           mui: ["@mui/material", "@mui/icons-material"],
         },
       },
