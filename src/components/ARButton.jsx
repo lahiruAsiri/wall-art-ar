@@ -1,48 +1,64 @@
 "use client"
 
 import { useState } from "react"
-import {
-  Button,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  Typography,
-  CircularProgress,
-  Alert,
-  Box,
-} from "@mui/material"
-import { ViewInAr, CameraAlt } from "@mui/icons-material"
+import { Button, Typography, CircularProgress, Alert } from "@mui/material"
+import { ViewInAr, Warning } from "@mui/icons-material"
 import ARViewer from "./ARViewer"
 
 const ARButton = ({ wallArtData, isSupported }) => {
   const [isARActive, setIsARActive] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [showPermissionDialog, setShowPermissionDialog] = useState(false)
 
-  const checkCameraPermission = async () => {
+  const testCameraAccess = async () => {
     try {
-      // Check if camera permission is already granted
-      const permission = await navigator.permissions.query({ name: "camera" })
-      return permission.state === "granted"
-    } catch (err) {
-      // Fallback: try to access camera directly
-      return false
-    }
-  }
+      console.log("Testing camera access...")
 
-  const requestCameraAccess = async () => {
-    try {
+      // Check if getUserMedia is available
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("Camera API not available on this device")
+      }
+
+      // Test camera access with specific constraints
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
       })
-      // Stop the stream immediately as we just needed to check permission
-      stream.getTracks().forEach((track) => track.stop())
+
+      console.log("Camera test successful:", stream)
+
+      // Stop test stream immediately
+      stream.getTracks().forEach((track) => {
+        track.stop()
+        console.log("Test camera track stopped")
+      })
+
       return true
     } catch (err) {
-      console.error("Camera access denied:", err)
-      return false
+      console.error("Camera test failed:", err)
+
+      let errorMessage = "Camera access failed: "
+      switch (err.name) {
+        case "NotAllowedError":
+          errorMessage += "Permission denied. Please allow camera access."
+          break
+        case "NotFoundError":
+          errorMessage += "No camera found on this device."
+          break
+        case "NotReadableError":
+          errorMessage += "Camera is being used by another application."
+          break
+        case "OverconstrainedError":
+          errorMessage += "Camera doesn't meet requirements."
+          break
+        default:
+          errorMessage += err.message
+      }
+
+      throw new Error(errorMessage)
     }
   }
 
@@ -51,46 +67,27 @@ const ARButton = ({ wallArtData, isSupported }) => {
     setIsLoading(true)
 
     try {
-      // Check if camera is available
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error("Camera not available on this device")
-      }
+      console.log("AR button clicked, starting camera test...")
 
-      // Check camera permission
-      const hasPermission = await checkCameraPermission()
-      if (!hasPermission) {
-        setShowPermissionDialog(true)
+      // Test camera access first
+      await testCameraAccess()
+
+      console.log("Camera test passed, starting AR...")
+
+      // Small delay to ensure UI updates
+      setTimeout(() => {
+        setIsARActive(true)
         setIsLoading(false)
-        return
-      }
-
-      // Test camera access
-      const cameraWorking = await requestCameraAccess()
-      if (!cameraWorking) {
-        throw new Error("Camera access denied. Please allow camera permissions.")
-      }
-
-      // Start AR
-      setIsARActive(true)
-      setIsLoading(false)
+      }, 500)
     } catch (err) {
-      console.error("AR initialization failed:", err)
+      console.error("AR start failed:", err)
       setError(err.message)
       setIsLoading(false)
     }
   }
 
-  const handlePermissionDialogClose = () => {
-    setShowPermissionDialog(false)
-    setIsLoading(false)
-  }
-
-  const handleTryAgain = async () => {
-    setShowPermissionDialog(false)
-    await handleARClick()
-  }
-
   const handleCloseAR = () => {
+    console.log("Closing AR viewer...")
     setIsARActive(false)
   }
 
@@ -103,59 +100,44 @@ const ARButton = ({ wallArtData, isSupported }) => {
         onClick={handleARClick}
         disabled={isLoading}
         sx={{
-          minWidth: 200,
-          py: 1.5,
-          background: "linear-gradient(45deg, #FE6B8B 30%, #FF8E53 90%)",
+          minWidth: 220,
+          py: 2,
+          fontSize: "1.1rem",
+          background: "linear-gradient(45deg, #FF6B6B 30%, #4ECDC4 90%)",
+          boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
           "&:hover": {
-            background: "linear-gradient(45deg, #FE6B8B 60%, #FF8E53 100%)",
+            background: "linear-gradient(45deg, #FF5252 30%, #26A69A 90%)",
+            boxShadow: "0 6px 25px rgba(0,0,0,0.4)",
+          },
+          "&:disabled": {
+            background: "rgba(0,0,0,0.12)",
           },
         }}
       >
-        {isLoading ? "Starting Camera..." : "View in AR"}
+        {isLoading ? "Starting Camera..." : "📱 View in AR"}
       </Button>
 
       {error && (
-        <Alert severity="error" sx={{ mt: 2 }}>
+        <Alert
+          severity="error"
+          sx={{ mt: 2 }}
+          action={
+            <Button color="inherit" size="small" onClick={() => setError(null)}>
+              Try Again
+            </Button>
+          }
+        >
           <Typography variant="body2">{error}</Typography>
-          <Button size="small" onClick={() => setError(null)} sx={{ mt: 1 }}>
-            Try Again
-          </Button>
         </Alert>
       )}
 
-      {/* Camera Permission Dialog */}
-      <Dialog open={showPermissionDialog} onClose={handlePermissionDialogClose}>
-        <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <CameraAlt color="primary" />
-          Camera Permission Required
-        </DialogTitle>
-        <DialogContent>
-          <Typography variant="body1" gutterBottom>
-            To use AR features, we need access to your camera.
-          </Typography>
-          <Box sx={{ mt: 2, p: 2, backgroundColor: "grey.100", borderRadius: 1 }}>
-            <Typography variant="body2" component="div">
-              <strong>Steps:</strong>
-              <ol style={{ margin: "8px 0", paddingLeft: "20px" }}>
-                <li>Click "Allow Camera Access" below</li>
-                <li>When prompted, select "Allow" for camera permission</li>
-                <li>Point your camera at a wall to place artwork</li>
-              </ol>
-            </Typography>
-          </Box>
-          <Alert severity="info" sx={{ mt: 2 }}>
-            Your camera feed stays on your device and is not recorded or shared.
-          </Alert>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handlePermissionDialogClose}>Cancel</Button>
-          <Button variant="contained" onClick={handleTryAgain} startIcon={<CameraAlt />}>
-            Allow Camera Access
-          </Button>
-        </DialogActions>
-      </Dialog>
+      {!isSupported && (
+        <Alert severity="info" sx={{ mt: 2 }} icon={<Warning />}>
+          <Typography variant="body2">📱 For best AR experience, use this on a mobile device with camera</Typography>
+        </Alert>
+      )}
 
-      {/* AR Viewer */}
+      {/* AR Viewer - Full Screen */}
       {isARActive && <ARViewer wallArtData={wallArtData} onClose={handleCloseAR} />}
     </>
   )
