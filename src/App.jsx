@@ -26,7 +26,7 @@ function App() {
             AR Wall Art Demo
           </Typography>
           <Typography variant="h6" component="p" gutterBottom align="center" color="text.secondary">
-            Experience how your wall art looks on your wall with AR
+            See how your wall art looks on your wall with AR
           </Typography>
           <ImageDisplay />
         </Box>
