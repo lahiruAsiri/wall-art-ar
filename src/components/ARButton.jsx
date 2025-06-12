@@ -1,63 +1,46 @@
 "use client"
 
 import { useState } from "react"
-import { Button, Typography, CircularProgress, Alert, Box } from "@mui/material"
-import { ViewInAr, Warning } from "@mui/icons-material"
+import { Button, Alert, Typography } from "@mui/material"
+import { ViewInAr } from "@mui/icons-material"
 import ARViewer from "./ARViewer"
 
-const ARButton = ({ wallArtData, isSupported }) => {
-  const [isARActive, setIsARActive] = useState(false)
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState(null)
+const ARButton = ({ wallArtData }) => {
+  const [showAR, setShowAR] = useState(false)
+  const [error, setError] = useState("")
 
-  const handleARClick = async () => {
-    setError(null)
-    setIsLoading(true)
-
-    try {
-      console.log("AR button clicked")
-
-      // Quick camera availability check
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error("Camera not available on this device")
-      }
-
-      // Start AR immediately - let ARViewer handle the camera setup
-      setIsARActive(true)
-      setIsLoading(false)
-    } catch (err) {
-      console.error("AR start failed:", err)
-      setError(err.message)
-      setIsLoading(false)
+  const handleClick = async () => {
+    // Check camera support
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setError("Camera not supported on this device")
+      return
     }
+
+    setShowAR(true)
   }
 
-  const handleCloseAR = () => {
-    console.log("Closing AR viewer")
-    setIsARActive(false)
+  const handleClose = () => {
+    setShowAR(false)
   }
 
   return (
-    <Box>
+    <>
       <Button
         variant="contained"
         size="large"
-        startIcon={isLoading ? <CircularProgress size={20} color="inherit" /> : <ViewInAr />}
-        onClick={handleARClick}
-        disabled={isLoading}
+        startIcon={<ViewInAr />}
+        onClick={handleClick}
         sx={{
-          minWidth: 220,
+          minWidth: 200,
           py: 2,
-          fontSize: "1.1rem",
           background: "linear-gradient(45deg, #FF6B6B 30%, #4ECDC4 90%)",
-          boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
+          fontSize: "1.1rem",
           "&:hover": {
             background: "linear-gradient(45deg, #FF5252 30%, #26A69A 90%)",
-            boxShadow: "0 6px 25px rgba(0,0,0,0.4)",
           },
         }}
       >
-        {isLoading ? "Starting..." : "📱 View in AR"}
+        📱 View in AR
       </Button>
 
       {error && (
@@ -66,15 +49,8 @@ const ARButton = ({ wallArtData, isSupported }) => {
         </Alert>
       )}
 
-      {!isSupported && (
-        <Alert severity="info" sx={{ mt: 2 }} icon={<Warning />}>
-          <Typography variant="body2">📱 For best results, use this on a mobile device with camera</Typography>
-        </Alert>
-      )}
-
-      {/* AR Viewer */}
-      {isARActive && <ARViewer wallArtData={wallArtData} onClose={handleCloseAR} />}
-    </Box>
+      {showAR && <ARViewer wallArtData={wallArtData} onClose={handleClose} />}
+    </>
   )
 }
 
