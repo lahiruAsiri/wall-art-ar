@@ -1,8 +1,8 @@
 "use client"
 
 import { useRef, useEffect, useState } from "react"
-import { Box, IconButton, Typography, Fab, Paper, Slider, Button } from "@mui/material"
-import { Close, RotateRight, CenterFocusStrong, ZoomIn, ZoomOut } from "@mui/icons-material"
+import { Box, IconButton, Typography, Fab, Paper, Button, Alert } from "@mui/material"
+import { Close, RotateRight, CenterFocusStrong, Add, Remove } from "@mui/icons-material"
 import * as THREE from "three"
 
 const ARViewer = ({ wallArtData, onClose }) => {
@@ -12,34 +12,50 @@ const ARViewer = ({ wallArtData, onClose }) => {
   const rendererRef = useRef(null)
   const cameraRef = useRef(null)
   const frameRef = useRef(null)
-  const raycasterRef = useRef(new THREE.Raycaster())
-  const mouseRef = useRef(new THREE.Vector2())
+  const xrSessionRef = useRef(null)
+  const hitTestSourceRef = useRef(null)
+  const reticleRef = useRef(null)
 
   const [isPlaced, setIsPlaced] = useState(false)
   const [scale, setScale] = useState(1)
   const [rotation, setRotation] = useState(0)
   const [cameraStarted, setCameraStarted] = useState(false)
-  const [isDragging, setIsDragging] = useState(false)
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
-  const [framePosition, setFramePosition] = useState({ x: 0, y: 0, z: -2 })
+  const [xrSupported, setXrSupported] = useState(false)
+  const [xrActive, setXrActive] = useState(false)
+  const [hitTestReady, setHitTestReady] = useState(false)
+  const [error, setError] = useState(null)
 
   useEffect(() => {
+    checkXRSupport()
     startCamera()
     return () => {
       cleanup()
     }
   }, [])
 
+  const checkXRSupport = async () => {
+    if ("xr" in navigator) {
+      try {
+        const supported = await navigator.xr.isSessionSupported("immersive-ar")
+        setXrSupported(supported)
+        console.log("WebXR AR supported:", supported)
+      } catch (err) {
+        console.log("WebXR check failed:", err)
+        setXrSupported(false)
+      }
+    } else {
+      console.log("WebXR not available")
+      setXrSupported(false)
+    }
+  }
+
   const startCamera = async () => {
     try {
       console.log("Starting camera...")
-
-      // Get camera stream
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "environment" },
       })
 
-      // Set up video
       if (videoRef.current) {
         videoRef.current.srcObject = stream
         videoRef.current.onloadedmetadata = () => {
@@ -50,7 +66,6 @@ const ARViewer = ({ wallArtData, onClose }) => {
       }
     } catch (error) {
       console.error("Camera error:", error)
-      // Try with any camera
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true })
         if (videoRef.current) {
@@ -62,7 +77,7 @@ const ARViewer = ({ wallArtData, onClose }) => {
           }
         }
       } catch (err) {
-        console.error("All camera attempts failed:", err)
+        setError("Camera access failed. Please allow camera permissions.")
       }
     }
   }
@@ -70,24 +85,25 @@ const ARViewer = ({ wallArtData, onClose }) => {
   const initThreeJS = () => {
     console.log("Initializing 3D scene...")
 
-    // Create scene
     const scene = new THREE.Scene()
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000)
     const renderer = new THREE.WebGLRenderer({
       canvas: canvasRef.current,
       alpha: true,
+      antialias: true,
     })
 
     renderer.setSize(window.innerWidth, window.innerHeight)
     renderer.setClearColor(0x000000, 0)
     renderer.shadowMap.enabled = true
     renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    renderer.xr.enabled = true
 
     sceneRef.current = scene
     rendererRef.current = renderer
     cameraRef.current = camera
 
-    // Add lights
+    // Lighting
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.6)
     scene.add(ambientLight)
 
@@ -96,66 +112,58 @@ const ARViewer = ({ wallArtData, onClose }) => {
     directionalLight.castShadow = true
     scene.add(directionalLight)
 
-    // Create frame
-    createFrame()
+    // Create reticle (placement indicator)
+    createReticle()
 
-    // Position camera
+    // Create artwork frame
+    createArtworkFrame()
+
+    // Position camera for non-AR mode
     camera.position.z = 3
 
-    // Add touch/mouse controls
-    addInteractionControls()
+    // Start render loop
+    renderer.setAnimationLoop(animate)
 
-    // Start animation
-    animate()
+    // Add interaction controls
+    addInteractionControls()
   }
 
-  const createFrame = () => {
+  const createReticle = () => {
+    const geometry = new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2)
+    const material = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.8,
+    })
+    const reticle = new THREE.Mesh(geometry, material)
+    reticle.matrixAutoUpdate = false
+    reticle.visible = false
+    sceneRef.current.add(reticle)
+    reticleRef.current = reticle
+  }
+
+  const createArtworkFrame = () => {
     const group = new THREE.Group()
 
-    // Frame (wood texture)
-    const frameGeometry = new THREE.BoxGeometry(2.2, 2.8, 0.15)
-    const frameMaterial = new THREE.MeshLambertMaterial({
-      color: 0x8b4513,
-      roughness: 0.8,
-    })
+    // Frame
+    const frameGeometry = new THREE.BoxGeometry(0.6, 0.8, 0.05)
+    const frameMaterial = new THREE.MeshLambertMaterial({ color: 0x8b4513 })
     const frameMesh = new THREE.Mesh(frameGeometry, frameMaterial)
     frameMesh.castShadow = true
     group.add(frameMesh)
 
-    // Inner frame
-    const innerFrameGeometry = new THREE.BoxGeometry(2.0, 2.6, 0.1)
-    const innerFrameMaterial = new THREE.MeshLambertMaterial({ color: 0x654321 })
-    const innerFrameMesh = new THREE.Mesh(innerFrameGeometry, innerFrameMaterial)
-    innerFrameMesh.position.z = 0.03
-    group.add(innerFrameMesh)
-
     // Picture
-    const pictureGeometry = new THREE.PlaneGeometry(1.8, 2.4)
+    const pictureGeometry = new THREE.PlaneGeometry(0.5, 0.7)
     const textureLoader = new THREE.TextureLoader()
     const texture = textureLoader.load(wallArtData.imageUrl)
     const pictureMaterial = new THREE.MeshLambertMaterial({ map: texture })
     const pictureMesh = new THREE.Mesh(pictureGeometry, pictureMaterial)
-    pictureMesh.position.z = 0.08
+    pictureMesh.position.z = 0.026
     group.add(pictureMesh)
 
-    // Glass effect
-    const glassGeometry = new THREE.PlaneGeometry(1.8, 2.4)
-    const glassMaterial = new THREE.MeshPhysicalMaterial({
-      color: 0xffffff,
-      transparent: true,
-      opacity: 0.1,
-      roughness: 0,
-      metalness: 0,
-      clearcoat: 1,
-    })
-    const glassMesh = new THREE.Mesh(glassGeometry, glassMaterial)
-    glassMesh.position.z = 0.09
-    group.add(glassMesh)
-
-    // Set initial position
-    group.position.set(framePosition.x, framePosition.y, framePosition.z)
+    // Initially hidden
     group.visible = false
-    group.name = "artworkFrame"
+    group.matrixAutoUpdate = false
 
     sceneRef.current.add(group)
     frameRef.current = group
@@ -165,114 +173,168 @@ const ARViewer = ({ wallArtData, onClose }) => {
     const canvas = canvasRef.current
     if (!canvas) return
 
-    // Touch events for mobile
-    canvas.addEventListener("touchstart", onTouchStart, { passive: false })
+    // Touch events
+    canvas.addEventListener("touchstart", onTouch, { passive: false })
     canvas.addEventListener("touchmove", onTouchMove, { passive: false })
     canvas.addEventListener("touchend", onTouchEnd, { passive: false })
 
-    // Mouse events for desktop
-    canvas.addEventListener("mousedown", onMouseDown)
-    canvas.addEventListener("mousemove", onMouseMove)
-    canvas.addEventListener("mouseup", onMouseUp)
+    // Mouse events for desktop testing
+    canvas.addEventListener("click", onClick)
 
-    // Prevent default touch behaviors
+    // Prevent default behaviors
     canvas.addEventListener("touchstart", (e) => e.preventDefault())
     canvas.addEventListener("touchmove", (e) => e.preventDefault())
   }
 
-  const getPointerPosition = (event) => {
-    const rect = canvasRef.current.getBoundingClientRect()
-    let clientX, clientY
-
-    if (event.touches && event.touches.length > 0) {
-      clientX = event.touches[0].clientX
-      clientY = event.touches[0].clientY
-    } else {
-      clientX = event.clientX
-      clientY = event.clientY
+  const startXRSession = async () => {
+    if (!xrSupported) {
+      setError("WebXR AR not supported on this device")
+      return
     }
 
-    return {
-      x: ((clientX - rect.left) / rect.width) * 2 - 1,
-      y: -((clientY - rect.top) / rect.height) * 2 + 1,
+    try {
+      console.log("Starting XR session...")
+      const session = await navigator.xr.requestSession("immersive-ar", {
+        requiredFeatures: ["hit-test"],
+        optionalFeatures: ["dom-overlay"],
+      })
+
+      xrSessionRef.current = session
+      setXrActive(true)
+
+      // Set up XR session
+      await rendererRef.current.xr.setSession(session)
+
+      // Initialize hit testing
+      const referenceSpace = await session.requestReferenceSpace("viewer")
+      const hitTestSource = await session.requestHitTestSource({ space: referenceSpace })
+      hitTestSourceRef.current = hitTestSource
+      setHitTestReady(true)
+
+      console.log("XR session started successfully")
+
+      session.addEventListener("end", () => {
+        console.log("XR session ended")
+        setXrActive(false)
+        setHitTestReady(false)
+        xrSessionRef.current = null
+        hitTestSourceRef.current = null
+      })
+    } catch (err) {
+      console.error("XR session failed:", err)
+      setError(`AR session failed: ${err.message}`)
     }
   }
 
-  const onTouchStart = (event) => {
-    if (!isPlaced || !frameRef.current) return
-
-    const pointer = getPointerPosition(event)
-    setIsDragging(true)
-    setDragStart({ x: pointer.x, y: pointer.y })
-
-    // Add visual feedback
-    if (frameRef.current) {
-      frameRef.current.scale.setScalar(scale * 1.05)
+  const onTouch = (event) => {
+    if (xrActive && hitTestReady && !isPlaced) {
+      placeArtwork()
+    } else if (isPlaced) {
+      // Handle artwork interaction
+      handleArtworkInteraction(event)
     }
   }
 
   const onTouchMove = (event) => {
-    if (!isDragging || !isPlaced || !frameRef.current) return
+    if (isPlaced && frameRef.current) {
+      // Move artwork based on touch
+      const touch = event.touches[0]
+      const rect = canvasRef.current.getBoundingClientRect()
+      const x = ((touch.clientX - rect.left) / rect.width) * 2 - 1
+      const y = -((touch.clientY - rect.top) / rect.height) * 2 + 1
 
-    const pointer = getPointerPosition(event)
-    const deltaX = (pointer.x - dragStart.x) * 3
-    const deltaY = (pointer.y - dragStart.y) * 3
+      // Convert screen coordinates to world coordinates
+      const vector = new THREE.Vector3(x, y, 0.5)
+      vector.unproject(cameraRef.current)
+      const dir = vector.sub(cameraRef.current.position).normalize()
+      const distance = -cameraRef.current.position.z / dir.z
+      const pos = cameraRef.current.position.clone().add(dir.multiplyScalar(distance))
 
-    // Update frame position
-    const newPosition = {
-      x: framePosition.x + deltaX,
-      y: framePosition.y + deltaY,
-      z: framePosition.z,
+      frameRef.current.position.copy(pos)
+      frameRef.current.updateMatrix()
     }
-
-    frameRef.current.position.set(newPosition.x, newPosition.y, newPosition.z)
-    setFramePosition(newPosition)
-    setDragStart({ x: pointer.x, y: pointer.y })
   }
 
   const onTouchEnd = () => {
-    setIsDragging(false)
+    // Touch ended
+  }
 
-    // Remove visual feedback
-    if (frameRef.current) {
-      frameRef.current.scale.setScalar(scale)
+  const onClick = (event) => {
+    if (!xrActive && !isPlaced) {
+      // Fallback placement for non-XR mode
+      placeArtworkFallback(event)
     }
   }
 
-  // Mouse events (same logic as touch)
-  const onMouseDown = (event) => onTouchStart(event)
-  const onMouseMove = (event) => onTouchMove(event)
-  const onMouseUp = () => onTouchEnd()
+  const placeArtwork = () => {
+    if (reticleRef.current && frameRef.current) {
+      frameRef.current.position.setFromMatrixPosition(reticleRef.current.matrix)
+      frameRef.current.quaternion.setFromRotationMatrix(reticleRef.current.matrix)
+      frameRef.current.visible = true
+      frameRef.current.updateMatrix()
+      setIsPlaced(true)
+      reticleRef.current.visible = false
+      console.log("Artwork placed at:", frameRef.current.position)
+    }
+  }
 
-  const animate = () => {
-    requestAnimationFrame(animate)
+  const placeArtworkFallback = (event) => {
+    if (frameRef.current) {
+      const rect = canvasRef.current.getBoundingClientRect()
+      const x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+      const y = -((event.clientY - rect.top) / rect.height) * 2 + 1
 
-    // Add subtle floating animation when not dragging
-    if (frameRef.current && isPlaced && !isDragging) {
-      const time = Date.now() * 0.001
-      frameRef.current.rotation.y = Math.sin(time * 0.5) * 0.02
-      frameRef.current.position.y = framePosition.y + Math.sin(time) * 0.01
+      const vector = new THREE.Vector3(x, y, 0.5)
+      vector.unproject(cameraRef.current)
+      const dir = vector.sub(cameraRef.current.position).normalize()
+      const distance = 2
+      const pos = cameraRef.current.position.clone().add(dir.multiplyScalar(distance))
+
+      frameRef.current.position.copy(pos)
+      frameRef.current.visible = true
+      frameRef.current.updateMatrix()
+      setIsPlaced(true)
+    }
+  }
+
+  const handleArtworkInteraction = (event) => {
+    // Handle artwork dragging and interaction
+    console.log("Artwork interaction")
+  }
+
+  const animate = (timestamp, frame) => {
+    if (xrActive && frame && hitTestSourceRef.current && !isPlaced) {
+      // Hit testing for placement
+      const referenceSpace = rendererRef.current.xr.getReferenceSpace()
+      const hitTestResults = frame.getHitTestResults(hitTestSourceRef.current)
+
+      if (hitTestResults.length > 0) {
+        const hit = hitTestResults[0]
+        const pose = hit.getPose(referenceSpace)
+
+        if (reticleRef.current && pose) {
+          reticleRef.current.visible = true
+          reticleRef.current.matrix.fromArray(pose.transform.matrix)
+        }
+      } else {
+        if (reticleRef.current) {
+          reticleRef.current.visible = false
+        }
+      }
     }
 
+    // Render
     if (rendererRef.current && sceneRef.current && cameraRef.current) {
       rendererRef.current.render(sceneRef.current, cameraRef.current)
     }
   }
 
-  const handlePlace = () => {
-    setIsPlaced(true)
+  const handleScale = (direction) => {
+    const newScale = direction === "up" ? scale * 1.2 : scale * 0.8
+    setScale(Math.max(0.3, Math.min(3.0, newScale)))
     if (frameRef.current) {
-      frameRef.current.visible = true
-      const newPos = { x: 0, y: 0, z: -1.5 }
-      frameRef.current.position.set(newPos.x, newPos.y, newPos.z)
-      setFramePosition(newPos)
-    }
-  }
-
-  const handleScale = (event, newValue) => {
-    setScale(newValue)
-    if (frameRef.current) {
-      frameRef.current.scale.setScalar(newValue)
+      frameRef.current.scale.setScalar(newScale)
+      frameRef.current.updateMatrix()
     }
   }
 
@@ -281,54 +343,62 @@ const ARViewer = ({ wallArtData, onClose }) => {
     setRotation(newRotation)
     if (frameRef.current) {
       frameRef.current.rotation.z = newRotation
+      frameRef.current.updateMatrix()
     }
   }
 
   const handleReset = () => {
+    setIsPlaced(false)
     setScale(1)
     setRotation(0)
-    const resetPos = { x: 0, y: 0, z: -1.5 }
-    setFramePosition(resetPos)
-
     if (frameRef.current) {
+      frameRef.current.visible = false
       frameRef.current.scale.setScalar(1)
       frameRef.current.rotation.z = 0
-      frameRef.current.position.set(resetPos.x, resetPos.y, resetPos.z)
+      frameRef.current.updateMatrix()
     }
-  }
-
-  const moveCloser = () => {
-    const newPos = { ...framePosition, z: framePosition.z + 0.3 }
-    setFramePosition(newPos)
-    if (frameRef.current) {
-      frameRef.current.position.set(newPos.x, newPos.y, newPos.z)
-    }
-  }
-
-  const moveFarther = () => {
-    const newPos = { ...framePosition, z: framePosition.z - 0.3 }
-    setFramePosition(newPos)
-    if (frameRef.current) {
-      frameRef.current.position.set(newPos.x, newPos.y, newPos.z)
+    if (reticleRef.current && xrActive) {
+      reticleRef.current.visible = true
     }
   }
 
   const cleanup = () => {
+    if (xrSessionRef.current) {
+      xrSessionRef.current.end()
+    }
     if (videoRef.current && videoRef.current.srcObject) {
       const tracks = videoRef.current.srcObject.getTracks()
       tracks.forEach((track) => track.stop())
     }
+  }
 
-    // Remove event listeners
-    const canvas = canvasRef.current
-    if (canvas) {
-      canvas.removeEventListener("touchstart", onTouchStart)
-      canvas.removeEventListener("touchmove", onTouchMove)
-      canvas.removeEventListener("touchend", onTouchEnd)
-      canvas.removeEventListener("mousedown", onMouseDown)
-      canvas.removeEventListener("mousemove", onMouseMove)
-      canvas.removeEventListener("mouseup", onMouseUp)
-    }
+  if (error) {
+    return (
+      <Box
+        sx={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          width: "100vw",
+          height: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: "black",
+          zIndex: 9999,
+          p: 2,
+        }}
+      >
+        <Paper sx={{ p: 4, textAlign: "center", maxWidth: 400 }}>
+          <Alert severity="error" sx={{ mb: 3 }}>
+            {error}
+          </Alert>
+          <Button variant="contained" onClick={onClose}>
+            Close
+          </Button>
+        </Paper>
+      </Box>
+    )
   }
 
   return (
@@ -344,21 +414,23 @@ const ARViewer = ({ wallArtData, onClose }) => {
         overflow: "hidden",
       }}
     >
-      {/* Camera Video */}
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          width: "100%",
-          height: "100%",
-          objectFit: "cover",
-        }}
-      />
+      {/* Camera Video (fallback for non-XR) */}
+      {!xrActive && (
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+          }}
+        />
+      )}
 
       {/* 3D Canvas */}
       <canvas
@@ -370,7 +442,7 @@ const ARViewer = ({ wallArtData, onClose }) => {
           width: "100%",
           height: "100%",
           zIndex: 2,
-          touchAction: "none", // Prevent scrolling
+          touchAction: "none",
         }}
       />
 
@@ -389,48 +461,27 @@ const ARViewer = ({ wallArtData, onClose }) => {
         <Close />
       </IconButton>
 
-      {/* Camera Status */}
-      {cameraStarted && (
-        <Box
-          sx={{
-            position: "absolute",
-            top: 20,
-            left: 20,
-            backgroundColor: "rgba(0,255,0,0.8)",
-            color: "white",
-            px: 2,
-            py: 1,
-            borderRadius: 2,
-            zIndex: 10,
-          }}
-        >
-          <Typography variant="caption">📹 Camera Active</Typography>
-        </Box>
-      )}
+      {/* AR Status */}
+      <Box
+        sx={{
+          position: "absolute",
+          top: 20,
+          left: 20,
+          backgroundColor: xrActive ? "rgba(0,255,0,0.8)" : "rgba(255,165,0,0.8)",
+          color: "white",
+          px: 2,
+          py: 1,
+          borderRadius: 2,
+          zIndex: 10,
+        }}
+      >
+        <Typography variant="caption">
+          {xrActive ? "🚀 WebXR Active" : cameraStarted ? "📹 Camera Active" : "📷 Starting..."}
+        </Typography>
+      </Box>
 
-      {/* Instructions */}
-      {isPlaced && (
-        <Box
-          sx={{
-            position: "absolute",
-            top: 80,
-            left: 20,
-            right: 20,
-            backgroundColor: "rgba(0,0,0,0.7)",
-            color: "white",
-            p: 2,
-            borderRadius: 2,
-            zIndex: 10,
-          }}
-        >
-          <Typography variant="body2" align="center">
-            👆 Drag to move • 🔄 Use controls to adjust • 📏 Pinch to resize
-          </Typography>
-        </Box>
-      )}
-
-      {/* Place Button */}
-      {!isPlaced && cameraStarted && (
+      {/* Start AR Button */}
+      {cameraStarted && xrSupported && !xrActive && (
         <Paper
           sx={{
             position: "absolute",
@@ -443,14 +494,58 @@ const ARViewer = ({ wallArtData, onClose }) => {
           }}
         >
           <Typography variant="h6" gutterBottom>
-            🎯 Place Your Wall Art
+            🚀 Start AR Experience
           </Typography>
           <Typography variant="body2" color="text.secondary" gutterBottom>
-            Point at a wall and tap to place your artwork
+            Enter immersive AR mode for the best experience
           </Typography>
-          <Button variant="contained" onClick={handlePlace} size="large" fullWidth>
-            Place Artwork Here
+          <Button variant="contained" onClick={startXRSession} size="large" fullWidth>
+            Start WebXR AR
           </Button>
+        </Paper>
+      )}
+
+      {/* Placement Instructions */}
+      {xrActive && !isPlaced && (
+        <Paper
+          sx={{
+            position: "absolute",
+            bottom: 120,
+            left: 20,
+            right: 20,
+            p: 3,
+            textAlign: "center",
+            zIndex: 10,
+          }}
+        >
+          <Typography variant="h6" gutterBottom>
+            🎯 Find a Surface
+          </Typography>
+          <Typography variant="body2" color="text.secondary" gutterBottom>
+            Point your device at a wall or flat surface, then tap to place your artwork
+          </Typography>
+        </Paper>
+      )}
+
+      {/* Fallback Instructions */}
+      {!xrSupported && cameraStarted && !isPlaced && (
+        <Paper
+          sx={{
+            position: "absolute",
+            bottom: 120,
+            left: 20,
+            right: 20,
+            p: 3,
+            textAlign: "center",
+            zIndex: 10,
+          }}
+        >
+          <Typography variant="h6" gutterBottom>
+            📱 Tap to Place
+          </Typography>
+          <Typography variant="body2" color="text.secondary" gutterBottom>
+            WebXR not supported. Tap anywhere to place your artwork
+          </Typography>
         </Paper>
       )}
 
@@ -470,19 +565,12 @@ const ARViewer = ({ wallArtData, onClose }) => {
             🎨 Adjust Your Artwork
           </Typography>
 
-          {/* Size Control */}
-          <Box sx={{ mb: 2 }}>
-            <Typography variant="body2">Size: {scale.toFixed(1)}x</Typography>
-            <Slider value={scale} onChange={handleScale} min={0.3} max={3.0} step={0.1} sx={{ mb: 1 }} />
-          </Box>
-
-          {/* Action Buttons */}
           <Box sx={{ display: "flex", justifyContent: "space-around", gap: 1 }}>
-            <Fab size="small" onClick={moveCloser} color="primary">
-              <ZoomIn />
+            <Fab size="small" onClick={() => handleScale("down")} color="primary">
+              <Remove />
             </Fab>
-            <Fab size="small" onClick={moveFarther} color="primary">
-              <ZoomOut />
+            <Fab size="small" onClick={() => handleScale("up")} color="primary">
+              <Add />
             </Fab>
             <Fab size="small" onClick={handleRotate} color="secondary">
               <RotateRight />
@@ -493,52 +581,9 @@ const ARViewer = ({ wallArtData, onClose }) => {
           </Box>
 
           <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block", textAlign: "center" }}>
-            Drag the artwork to move it around your wall
+            {xrActive ? "Touch and drag to move in AR space" : "Drag to move around"}
           </Typography>
         </Paper>
-      )}
-
-      {/* Crosshair */}
-      {!isPlaced && cameraStarted && (
-        <Box
-          sx={{
-            position: "absolute",
-            top: "50%",
-            left: "50%",
-            transform: "translate(-50%, -50%)",
-            width: 80,
-            height: 80,
-            border: "4px solid white",
-            borderRadius: "50%",
-            zIndex: 5,
-            animation: "pulse 2s infinite",
-            "@keyframes pulse": {
-              "0%": { transform: "translate(-50%, -50%) scale(1)", opacity: 1 },
-              "50%": { transform: "translate(-50%, -50%) scale(1.1)", opacity: 0.7 },
-              "100%": { transform: "translate(-50%, -50%) scale(1)", opacity: 1 },
-            },
-            "&::before": {
-              content: '""',
-              position: "absolute",
-              top: "50%",
-              left: "50%",
-              transform: "translate(-50%, -50%)",
-              width: 4,
-              height: 40,
-              backgroundColor: "white",
-            },
-            "&::after": {
-              content: '""',
-              position: "absolute",
-              top: "50%",
-              left: "50%",
-              transform: "translate(-50%, -50%)",
-              width: 40,
-              height: 4,
-              backgroundColor: "white",
-            },
-          }}
-        />
       )}
 
       {/* Loading */}
