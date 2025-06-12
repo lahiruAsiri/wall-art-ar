@@ -23,11 +23,19 @@ const ARViewer = ({ wallArtData, onClose }) => {
   const [isLoading, setIsLoading] = useState(true)
   const [cameraReady, setCameraReady] = useState(false)
   const [debugInfo, setDebugInfo] = useState("")
+  const [componentMounted, setComponentMounted] = useState(false)
 
   useEffect(() => {
-    console.log("ARViewer mounted, starting initialization...")
-    initializeAR()
+    console.log("ARViewer mounted")
+    setComponentMounted(true)
+
+    // Small delay to ensure DOM is ready
+    const timer = setTimeout(() => {
+      initializeAR()
+    }, 100)
+
     return () => {
+      clearTimeout(timer)
       console.log("ARViewer unmounting, cleaning up...")
       cleanup()
     }
@@ -35,8 +43,25 @@ const ARViewer = ({ wallArtData, onClose }) => {
 
   const initializeAR = async () => {
     try {
-      setDebugInfo("Checking camera availability...")
       console.log("Starting AR initialization...")
+      setDebugInfo("Initializing AR...")
+
+      // Wait for component to be fully mounted
+      if (!componentMounted) {
+        console.log("Component not mounted yet, waiting...")
+        setTimeout(initializeAR, 100)
+        return
+      }
+
+      // Check if video element is available
+      if (!videoRef.current) {
+        console.log("Video element not ready, waiting...")
+        setTimeout(initializeAR, 100)
+        return
+      }
+
+      setDebugInfo("Checking camera availability...")
+      console.log("Video element found:", videoRef.current)
 
       // Check if camera is available
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -47,7 +72,7 @@ const ARViewer = ({ wallArtData, onClose }) => {
       await startCamera()
 
       setDebugInfo("Camera started, initializing 3D scene...")
-      await new Promise((resolve) => setTimeout(resolve, 1000)) // Wait for camera to stabilize
+      await new Promise((resolve) => setTimeout(resolve, 500))
 
       initializeThreeJS()
       setIsLoading(false)
@@ -61,19 +86,25 @@ const ARViewer = ({ wallArtData, onClose }) => {
 
   const startCamera = async () => {
     try {
-      console.log("Requesting camera access...")
+      console.log("Starting camera...")
+
+      // Double check video element
+      const videoElement = videoRef.current
+      if (!videoElement) {
+        throw new Error("Video element not found - DOM not ready")
+      }
+
+      console.log("Video element confirmed:", videoElement)
 
       // Try different camera configurations
       const configs = [
-        // Configuration 1: Ideal back camera
         {
           video: {
             facingMode: { exact: "environment" },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
+            width: { ideal: 1280, min: 640 },
+            height: { ideal: 720, min: 480 },
           },
         },
-        // Configuration 2: Prefer back camera
         {
           video: {
             facingMode: { ideal: "environment" },
@@ -81,14 +112,12 @@ const ARViewer = ({ wallArtData, onClose }) => {
             height: { ideal: 720 },
           },
         },
-        // Configuration 3: Any camera
         {
           video: {
             width: { ideal: 1280 },
             height: { ideal: 720 },
           },
         },
-        // Configuration 4: Basic video
         {
           video: true,
         },
@@ -103,7 +132,7 @@ const ARViewer = ({ wallArtData, onClose }) => {
           setDebugInfo(`Trying camera configuration ${i + 1}...`)
 
           stream = await navigator.mediaDevices.getUserMedia(configs[i])
-          console.log(`Camera config ${i + 1} successful:`, stream)
+          console.log(`Camera config ${i + 1} successful`)
           break
         } catch (err) {
           console.log(`Camera config ${i + 1} failed:`, err.message)
@@ -120,57 +149,64 @@ const ARViewer = ({ wallArtData, onClose }) => {
       setCameraStream(stream)
 
       // Set up video element
-      const video = videoRef.current
-      if (!video) {
-        throw new Error("Video element not found")
-      }
+      videoElement.srcObject = stream
+      videoElement.setAttribute("playsinline", "true")
+      videoElement.setAttribute("webkit-playsinline", "true")
+      videoElement.setAttribute("muted", "true")
+      videoElement.muted = true
+      videoElement.autoplay = true
 
-      video.srcObject = stream
-      video.setAttribute("playsinline", "true")
-      video.setAttribute("webkit-playsinline", "true")
-      video.muted = true
-      video.autoplay = true
-
-      // Handle video events
+      // Wait for video to be ready
       return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
-          reject(new Error("Camera startup timeout"))
-        }, 10000) // 10 second timeout
+          reject(new Error("Camera startup timeout (10 seconds)"))
+        }, 10000)
 
-        video.onloadedmetadata = () => {
+        const cleanup = () => {
+          clearTimeout(timeout)
+          videoElement.removeEventListener("loadedmetadata", onLoadedMetadata)
+          videoElement.removeEventListener("error", onError)
+          videoElement.removeEventListener("canplay", onCanPlay)
+        }
+
+        const onLoadedMetadata = () => {
           console.log("Video metadata loaded")
           setDebugInfo("Video metadata loaded, starting playback...")
-          clearTimeout(timeout)
+        }
 
-          video
+        const onCanPlay = () => {
+          console.log("Video can play, attempting to start...")
+          setDebugInfo("Starting video playback...")
+
+          videoElement
             .play()
             .then(() => {
               console.log("Video playing successfully")
               setCameraReady(true)
               setDebugInfo("Camera active!")
+              cleanup()
               resolve()
             })
             .catch((playError) => {
               console.error("Video play failed:", playError)
+              cleanup()
               reject(new Error(`Video play failed: ${playError.message}`))
             })
         }
 
-        video.onerror = (err) => {
+        const onError = (err) => {
           console.error("Video error:", err)
-          clearTimeout(timeout)
+          cleanup()
           reject(new Error("Video element error"))
         }
 
-        video.onloadstart = () => {
-          console.log("Video load started")
-          setDebugInfo("Loading video stream...")
-        }
+        // Add event listeners
+        videoElement.addEventListener("loadedmetadata", onLoadedMetadata)
+        videoElement.addEventListener("canplay", onCanPlay)
+        videoElement.addEventListener("error", onError)
 
-        video.oncanplay = () => {
-          console.log("Video can play")
-          setDebugInfo("Video ready to play...")
-        }
+        // Trigger load
+        videoElement.load()
       })
     } catch (err) {
       console.error("Camera access failed:", err)
@@ -178,16 +214,16 @@ const ARViewer = ({ wallArtData, onClose }) => {
 
       switch (err.name) {
         case "NotAllowedError":
-          errorMessage += "Permission denied. Please allow camera access and try again."
+          errorMessage += "Permission denied. Please allow camera access."
           break
         case "NotFoundError":
-          errorMessage += "No camera found. Please check if your device has a camera."
+          errorMessage += "No camera found on this device."
           break
         case "NotReadableError":
-          errorMessage += "Camera is busy. Please close other apps using the camera."
+          errorMessage += "Camera is busy. Close other apps using the camera."
           break
         case "OverconstrainedError":
-          errorMessage += "Camera doesn't support the required settings."
+          errorMessage += "Camera doesn't support required settings."
           break
         case "SecurityError":
           errorMessage += "Camera access blocked. Please use HTTPS."
@@ -204,6 +240,7 @@ const ARViewer = ({ wallArtData, onClose }) => {
     try {
       console.log("Initializing Three.js...")
 
+      // Check canvas element
       if (!canvasRef.current) {
         throw new Error("Canvas element not found")
       }
@@ -222,7 +259,7 @@ const ARViewer = ({ wallArtData, onClose }) => {
       })
 
       renderer.setSize(window.innerWidth, window.innerHeight)
-      renderer.setClearColor(0x000000, 0) // Transparent
+      renderer.setClearColor(0x000000, 0)
       renderer.shadowMap.enabled = true
       renderer.shadowMap.type = THREE.PCFSoftShadowMap
 
@@ -382,6 +419,22 @@ const ARViewer = ({ wallArtData, onClose }) => {
           zIndex: 9999,
         }}
       >
+        {/* Hidden video element for camera access */}
+        <video
+          ref={videoRef}
+          style={{
+            position: "absolute",
+            top: -1000,
+            left: -1000,
+            width: 1,
+            height: 1,
+            opacity: 0,
+          }}
+          autoPlay
+          playsInline
+          muted
+        />
+
         <Paper sx={{ p: 4, textAlign: "center", maxWidth: 350, backgroundColor: "rgba(255,255,255,0.95)" }}>
           <Typography variant="h6" gutterBottom color="text.primary">
             📷 Starting AR Camera
