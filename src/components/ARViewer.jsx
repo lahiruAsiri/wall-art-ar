@@ -22,29 +22,39 @@ const ARViewer = ({ wallArtData, onClose }) => {
   const [error, setError] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const [cameraReady, setCameraReady] = useState(false)
+  const [debugInfo, setDebugInfo] = useState("")
 
   useEffect(() => {
+    console.log("ARViewer mounted, starting initialization...")
     initializeAR()
     return () => {
+      console.log("ARViewer unmounting, cleaning up...")
       cleanup()
     }
   }, [])
 
   const initializeAR = async () => {
     try {
+      setDebugInfo("Checking camera availability...")
       console.log("Starting AR initialization...")
 
-      // First, start camera
+      // Check if camera is available
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("Camera not supported on this device")
+      }
+
+      setDebugInfo("Requesting camera access...")
       await startCamera()
 
-      // Wait a bit for camera to initialize
-      setTimeout(() => {
-        initializeThreeJS()
-        setIsLoading(false)
-      }, 1000)
+      setDebugInfo("Camera started, initializing 3D scene...")
+      await new Promise((resolve) => setTimeout(resolve, 1000)) // Wait for camera to stabilize
+
+      initializeThreeJS()
+      setIsLoading(false)
+      setDebugInfo("AR ready!")
     } catch (err) {
       console.error("AR initialization failed:", err)
-      setError(`Camera Error: ${err.message}`)
+      setError(err.message)
       setIsLoading(false)
     }
   }
@@ -53,60 +63,137 @@ const ARViewer = ({ wallArtData, onClose }) => {
     try {
       console.log("Requesting camera access...")
 
-      // Request camera with specific constraints
-      const constraints = {
-        video: {
-          facingMode: { ideal: "environment" }, // Prefer back camera
-          width: { ideal: 1280, min: 640 },
-          height: { ideal: 720, min: 480 },
+      // Try different camera configurations
+      const configs = [
+        // Configuration 1: Ideal back camera
+        {
+          video: {
+            facingMode: { exact: "environment" },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
         },
-        audio: false,
+        // Configuration 2: Prefer back camera
+        {
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+        },
+        // Configuration 3: Any camera
+        {
+          video: {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+        },
+        // Configuration 4: Basic video
+        {
+          video: true,
+        },
+      ]
+
+      let stream = null
+      let lastError = null
+
+      for (let i = 0; i < configs.length; i++) {
+        try {
+          console.log(`Trying camera config ${i + 1}:`, configs[i])
+          setDebugInfo(`Trying camera configuration ${i + 1}...`)
+
+          stream = await navigator.mediaDevices.getUserMedia(configs[i])
+          console.log(`Camera config ${i + 1} successful:`, stream)
+          break
+        } catch (err) {
+          console.log(`Camera config ${i + 1} failed:`, err.message)
+          lastError = err
+          continue
+        }
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia(constraints)
-      console.log("Camera stream obtained:", stream)
+      if (!stream) {
+        throw lastError || new Error("All camera configurations failed")
+      }
 
+      console.log("Camera stream obtained:", stream)
       setCameraStream(stream)
 
       // Set up video element
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        videoRef.current.setAttribute("playsinline", true)
-        videoRef.current.setAttribute("webkit-playsinline", true)
-        videoRef.current.muted = true
+      const video = videoRef.current
+      if (!video) {
+        throw new Error("Video element not found")
+      }
 
-        // Wait for video to be ready
-        videoRef.current.onloadedmetadata = () => {
+      video.srcObject = stream
+      video.setAttribute("playsinline", "true")
+      video.setAttribute("webkit-playsinline", "true")
+      video.muted = true
+      video.autoplay = true
+
+      // Handle video events
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error("Camera startup timeout"))
+        }, 10000) // 10 second timeout
+
+        video.onloadedmetadata = () => {
           console.log("Video metadata loaded")
-          videoRef.current
+          setDebugInfo("Video metadata loaded, starting playback...")
+          clearTimeout(timeout)
+
+          video
             .play()
             .then(() => {
               console.log("Video playing successfully")
               setCameraReady(true)
+              setDebugInfo("Camera active!")
+              resolve()
             })
-            .catch((err) => {
-              console.error("Video play failed:", err)
-              setError("Failed to start camera preview")
+            .catch((playError) => {
+              console.error("Video play failed:", playError)
+              reject(new Error(`Video play failed: ${playError.message}`))
             })
         }
 
-        videoRef.current.onerror = (err) => {
+        video.onerror = (err) => {
           console.error("Video error:", err)
-          setError("Camera preview error")
+          clearTimeout(timeout)
+          reject(new Error("Video element error"))
         }
-      }
+
+        video.onloadstart = () => {
+          console.log("Video load started")
+          setDebugInfo("Loading video stream...")
+        }
+
+        video.oncanplay = () => {
+          console.log("Video can play")
+          setDebugInfo("Video ready to play...")
+        }
+      })
     } catch (err) {
       console.error("Camera access failed:", err)
-      let errorMessage = "Camera access failed. "
+      let errorMessage = "Camera failed: "
 
-      if (err.name === "NotAllowedError") {
-        errorMessage += "Please allow camera permissions and refresh the page."
-      } else if (err.name === "NotFoundError") {
-        errorMessage += "No camera found on this device."
-      } else if (err.name === "NotReadableError") {
-        errorMessage += "Camera is being used by another app."
-      } else {
-        errorMessage += err.message
+      switch (err.name) {
+        case "NotAllowedError":
+          errorMessage += "Permission denied. Please allow camera access and try again."
+          break
+        case "NotFoundError":
+          errorMessage += "No camera found. Please check if your device has a camera."
+          break
+        case "NotReadableError":
+          errorMessage += "Camera is busy. Please close other apps using the camera."
+          break
+        case "OverconstrainedError":
+          errorMessage += "Camera doesn't support the required settings."
+          break
+        case "SecurityError":
+          errorMessage += "Camera access blocked. Please use HTTPS."
+          break
+        default:
+          errorMessage += err.message
       }
 
       throw new Error(errorMessage)
@@ -114,73 +201,75 @@ const ARViewer = ({ wallArtData, onClose }) => {
   }
 
   const initializeThreeJS = () => {
-    if (!canvasRef.current) {
-      console.error("Canvas ref not available")
-      return
-    }
+    try {
+      console.log("Initializing Three.js...")
 
-    console.log("Initializing Three.js...")
-
-    // Create scene
-    const scene = new THREE.Scene()
-
-    // Create camera with proper aspect ratio
-    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000)
-
-    // Create renderer
-    const renderer = new THREE.WebGLRenderer({
-      canvas: canvasRef.current,
-      antialias: true,
-      alpha: true,
-    })
-
-    renderer.setSize(window.innerWidth, window.innerHeight)
-    renderer.setClearColor(0x000000, 0) // Transparent background
-    renderer.shadowMap.enabled = true
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap
-
-    // Store references
-    sceneRef.current = scene
-    rendererRef.current = renderer
-    cameraRef.current = camera
-
-    // Add lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.8)
-    scene.add(ambientLight)
-
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0)
-    directionalLight.position.set(5, 5, 5)
-    directionalLight.castShadow = true
-    scene.add(directionalLight)
-
-    // Create picture frame
-    createPictureFrame()
-
-    // Position camera
-    camera.position.set(0, 0, 3)
-    camera.lookAt(0, 0, 0)
-
-    // Start render loop
-    const animate = () => {
-      animationRef.current = requestAnimationFrame(animate)
-
-      if (rendererRef.current && sceneRef.current && cameraRef.current) {
-        rendererRef.current.render(sceneRef.current, cameraRef.current)
+      if (!canvasRef.current) {
+        throw new Error("Canvas element not found")
       }
-    }
-    animate()
 
-    // Handle window resize
-    const handleResize = () => {
-      if (cameraRef.current && rendererRef.current) {
-        cameraRef.current.aspect = window.innerWidth / window.innerHeight
-        cameraRef.current.updateProjectionMatrix()
-        rendererRef.current.setSize(window.innerWidth, window.innerHeight)
+      // Create scene
+      const scene = new THREE.Scene()
+
+      // Create camera
+      const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000)
+
+      // Create renderer
+      const renderer = new THREE.WebGLRenderer({
+        canvas: canvasRef.current,
+        antialias: true,
+        alpha: true,
+      })
+
+      renderer.setSize(window.innerWidth, window.innerHeight)
+      renderer.setClearColor(0x000000, 0) // Transparent
+      renderer.shadowMap.enabled = true
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap
+
+      // Store references
+      sceneRef.current = scene
+      rendererRef.current = renderer
+      cameraRef.current = camera
+
+      // Add lighting
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.8)
+      scene.add(ambientLight)
+
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0)
+      directionalLight.position.set(5, 5, 5)
+      directionalLight.castShadow = true
+      scene.add(directionalLight)
+
+      // Create picture frame
+      createPictureFrame()
+
+      // Position camera
+      camera.position.set(0, 0, 3)
+
+      // Start render loop
+      const animate = () => {
+        animationRef.current = requestAnimationFrame(animate)
+        if (rendererRef.current && sceneRef.current && cameraRef.current) {
+          rendererRef.current.render(sceneRef.current, cameraRef.current)
+        }
       }
-    }
-    window.addEventListener("resize", handleResize)
+      animate()
 
-    console.log("Three.js initialized successfully")
+      // Handle resize
+      const handleResize = () => {
+        if (cameraRef.current && rendererRef.current) {
+          cameraRef.current.aspect = window.innerWidth / window.innerHeight
+          cameraRef.current.updateProjectionMatrix()
+          rendererRef.current.setSize(window.innerWidth, window.innerHeight)
+        }
+      }
+      window.addEventListener("resize", handleResize)
+
+      console.log("Three.js initialized successfully")
+    } catch (err) {
+      console.error("Three.js initialization failed:", err)
+      setError(`3D initialization failed: ${err.message}`)
+    }
   }
 
   const createPictureFrame = () => {
@@ -192,84 +281,37 @@ const ARViewer = ({ wallArtData, onClose }) => {
     const frameDepth = 0.06
     const borderWidth = 0.06
 
-    // Create frame border (wood frame)
+    // Create frame
     const frameGeometry = new THREE.BoxGeometry(frameWidth + borderWidth * 2, frameHeight + borderWidth * 2, frameDepth)
-    const frameMaterial = new THREE.MeshLambertMaterial({
-      color: 0x8b4513,
-      roughness: 0.8,
-    })
+    const frameMaterial = new THREE.MeshLambertMaterial({ color: 0x8b4513 })
     const frameMesh = new THREE.Mesh(frameGeometry, frameMaterial)
-    frameMesh.castShadow = true
     group.add(frameMesh)
 
-    // Create inner frame
-    const innerFrameGeometry = new THREE.BoxGeometry(
-      frameWidth + borderWidth,
-      frameHeight + borderWidth,
-      frameDepth * 0.8,
-    )
-    const innerFrameMaterial = new THREE.MeshLambertMaterial({
-      color: 0x654321,
-    })
-    const innerFrameMesh = new THREE.Mesh(innerFrameGeometry, innerFrameMaterial)
-    innerFrameMesh.position.z = frameDepth * 0.1
-    group.add(innerFrameMesh)
-
-    // Create artwork plane
+    // Create artwork
     const artworkGeometry = new THREE.PlaneGeometry(frameWidth, frameHeight)
-
-    // Load artwork texture
     const textureLoader = new THREE.TextureLoader()
-    textureLoader.crossOrigin = "anonymous"
 
     const artworkTexture = textureLoader.load(
       wallArtData.imageUrl,
-      (texture) => {
-        console.log("Artwork texture loaded successfully")
-        texture.minFilter = THREE.LinearFilter
-        texture.magFilter = THREE.LinearFilter
-      },
-      (progress) => {
-        console.log("Loading texture:", progress)
-      },
-      (error) => {
-        console.error("Error loading artwork texture:", error)
-      },
+      () => console.log("Artwork loaded"),
+      undefined,
+      (error) => console.error("Artwork load error:", error),
     )
 
-    const artworkMaterial = new THREE.MeshLambertMaterial({
-      map: artworkTexture,
-    })
+    const artworkMaterial = new THREE.MeshLambertMaterial({ map: artworkTexture })
     const artworkMesh = new THREE.Mesh(artworkGeometry, artworkMaterial)
     artworkMesh.position.z = frameDepth / 2 + 0.01
     group.add(artworkMesh)
 
-    // Add subtle glass effect
-    const glassGeometry = new THREE.PlaneGeometry(frameWidth, frameHeight)
-    const glassMaterial = new THREE.MeshPhysicalMaterial({
-      color: 0xffffff,
-      transparent: true,
-      opacity: 0.05,
-      roughness: 0,
-      metalness: 0,
-    })
-    const glassMesh = new THREE.Mesh(glassGeometry, glassMaterial)
-    glassMesh.position.z = frameDepth / 2 + 0.02
-    group.add(glassMesh)
-
-    // Position the frame initially hidden
+    // Position and hide initially
     group.position.set(0, 0, -2)
     group.visible = false
-    group.castShadow = true
 
     sceneRef.current.add(group)
     frameRef.current = group
-
-    console.log("Picture frame created")
   }
 
   const handlePlaceFrame = () => {
-    console.log("Placing frame...")
     setIsPlaced(true)
     if (frameRef.current) {
       frameRef.current.visible = true
@@ -305,28 +347,23 @@ const ARViewer = ({ wallArtData, onClose }) => {
   const cleanup = () => {
     console.log("Cleaning up AR viewer...")
 
-    // Stop animation loop
     if (animationRef.current) {
       cancelAnimationFrame(animationRef.current)
     }
 
-    // Stop camera stream
     if (cameraStream) {
       cameraStream.getTracks().forEach((track) => {
         track.stop()
-        console.log("Camera track stopped")
+        console.log("Camera track stopped:", track.kind)
       })
     }
 
-    // Cleanup Three.js
     if (rendererRef.current) {
       rendererRef.current.dispose()
     }
-
-    // Remove event listeners
-    window.removeEventListener("resize", () => {})
   }
 
+  // Loading screen
   if (isLoading) {
     return (
       <Box
@@ -337,24 +374,54 @@ const ARViewer = ({ wallArtData, onClose }) => {
           width: "100vw",
           height: "100vh",
           display: "flex",
+          flexDirection: "column",
           alignItems: "center",
           justifyContent: "center",
           backgroundColor: "black",
+          color: "white",
           zIndex: 9999,
         }}
       >
-        <Paper sx={{ p: 4, textAlign: "center", maxWidth: 300 }}>
-          <Typography variant="h6" gutterBottom>
-            📷 Starting Camera...
+        <Paper sx={{ p: 4, textAlign: "center", maxWidth: 350, backgroundColor: "rgba(255,255,255,0.95)" }}>
+          <Typography variant="h6" gutterBottom color="text.primary">
+            📷 Starting AR Camera
           </Typography>
-          <Typography variant="body2" color="text.secondary">
-            {cameraReady ? "Camera ready! Loading AR..." : "Please wait while we access your camera"}
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            {debugInfo}
           </Typography>
+          <Box sx={{ display: "flex", justifyContent: "center", mb: 2 }}>
+            <div
+              style={{
+                width: 40,
+                height: 40,
+                border: "4px solid #f3f3f3",
+                borderTop: "4px solid #3498db",
+                borderRadius: "50%",
+                animation: "spin 1s linear infinite",
+              }}
+            />
+          </Box>
+          <Typography variant="caption" color="text.secondary">
+            This may take a few seconds...
+          </Typography>
+          <Button onClick={onClose} sx={{ mt: 2 }} variant="outlined" size="small">
+            Cancel
+          </Button>
         </Paper>
+
+        <style>
+          {`
+            @keyframes spin {
+              0% { transform: rotate(0deg); }
+              100% { transform: rotate(360deg); }
+            }
+          `}
+        </style>
       </Box>
     )
   }
 
+  // Error screen
   if (error) {
     return (
       <Box
@@ -369,32 +436,45 @@ const ARViewer = ({ wallArtData, onClose }) => {
           justifyContent: "center",
           backgroundColor: "black",
           zIndex: 9999,
+          p: 2,
         }}
       >
         <Paper sx={{ p: 4, textAlign: "center", maxWidth: 400 }}>
           <Alert severity="error" sx={{ mb: 3 }}>
-            <Typography variant="body1">{error}</Typography>
+            <Typography variant="body1" gutterBottom>
+              {error}
+            </Typography>
           </Alert>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Try these steps:
+
+          <Typography variant="h6" gutterBottom>
+            Troubleshooting Steps:
           </Typography>
           <Typography variant="body2" component="div" sx={{ textAlign: "left", mb: 3 }}>
-            1. Refresh the page
+            1. <strong>Refresh the page</strong> and try again
             <br />
-            2. Allow camera permissions
+            2. <strong>Allow camera permissions</strong> when prompted
             <br />
-            3. Make sure no other app is using the camera
+            3. <strong>Close other apps</strong> that might be using the camera
             <br />
-            4. Try a different browser (Chrome recommended)
+            4. <strong>Try Chrome browser</strong> for best compatibility
+            <br />
+            5. <strong>Check if HTTPS</strong> is enabled (required for camera)
           </Typography>
-          <Button variant="contained" onClick={onClose}>
-            Close and Try Again
-          </Button>
+
+          <Box sx={{ display: "flex", gap: 2, justifyContent: "center" }}>
+            <Button variant="outlined" onClick={onClose}>
+              Close
+            </Button>
+            <Button variant="contained" onClick={() => window.location.reload()}>
+              Refresh Page
+            </Button>
+          </Box>
         </Paper>
       </Box>
     )
   }
 
+  // Main AR interface
   return (
     <Box
       sx={{
@@ -414,7 +494,6 @@ const ARViewer = ({ wallArtData, onClose }) => {
         autoPlay
         playsInline
         muted
-        webkit-playsinline="true"
         style={{
           position: "absolute",
           top: 0,
@@ -436,7 +515,6 @@ const ARViewer = ({ wallArtData, onClose }) => {
           width: "100%",
           height: "100%",
           zIndex: 2,
-          pointerEvents: "auto",
         }}
       />
 
@@ -450,15 +528,12 @@ const ARViewer = ({ wallArtData, onClose }) => {
           backgroundColor: "rgba(0,0,0,0.8)",
           color: "white",
           zIndex: 10,
-          "&:hover": {
-            backgroundColor: "rgba(0,0,0,0.9)",
-          },
         }}
       >
         <Close />
       </IconButton>
 
-      {/* Camera Status Indicator */}
+      {/* Camera Status */}
       <Box
         sx={{
           position: "absolute",
@@ -473,11 +548,10 @@ const ARViewer = ({ wallArtData, onClose }) => {
           py: 1,
           borderRadius: 2,
           zIndex: 10,
-          fontSize: "0.875rem",
         }}
       >
         <Cameraswitch fontSize="small" />
-        <Typography variant="caption">{cameraReady ? "📹 Camera Active" : "📷 Starting Camera..."}</Typography>
+        <Typography variant="caption">{cameraReady ? "📹 Camera Active" : "📷 Starting..."}</Typography>
       </Box>
 
       {/* Instructions */}
@@ -499,7 +573,7 @@ const ARViewer = ({ wallArtData, onClose }) => {
             🎯 Place Your Artwork
           </Typography>
           <Typography variant="body2" color="text.secondary" gutterBottom>
-            Point your camera at a wall and tap the button below
+            Point your camera at a wall and tap below
           </Typography>
           <Button
             variant="contained"
@@ -528,11 +602,10 @@ const ARViewer = ({ wallArtData, onClose }) => {
             borderRadius: 2,
           }}
         >
-          <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: "bold" }}>
-            🎨 Adjust Your Artwork
+          <Typography variant="subtitle1" gutterBottom>
+            🎨 Adjust Artwork
           </Typography>
 
-          {/* Scale control */}
           <Box sx={{ mb: 3 }}>
             <Typography variant="body2" gutterBottom>
               Size: {scale.toFixed(1)}x
@@ -544,29 +617,21 @@ const ARViewer = ({ wallArtData, onClose }) => {
               max={3.0}
               step={0.1}
               valueLabelDisplay="auto"
-              sx={{
-                color: "primary.main",
-                "& .MuiSlider-thumb": {
-                  width: 24,
-                  height: 24,
-                },
-              }}
             />
           </Box>
 
-          {/* Action buttons */}
           <Box sx={{ display: "flex", justifyContent: "space-around", gap: 2 }}>
-            <Fab size="medium" onClick={handleRotate} color="primary" sx={{ boxShadow: 3 }}>
+            <Fab size="medium" onClick={handleRotate} color="primary">
               <RotateRight />
             </Fab>
-            <Fab size="medium" onClick={handleReset} color="secondary" sx={{ boxShadow: 3 }}>
+            <Fab size="medium" onClick={handleReset} color="secondary">
               <CenterFocusStrong />
             </Fab>
           </Box>
         </Paper>
       )}
 
-      {/* Crosshair for placement */}
+      {/* Crosshair */}
       {!isPlaced && cameraReady && (
         <Box
           sx={{
@@ -580,21 +645,6 @@ const ARViewer = ({ wallArtData, onClose }) => {
             borderRadius: "50%",
             zIndex: 5,
             boxShadow: "0 0 30px rgba(0,0,0,0.7)",
-            animation: "pulse 2s infinite",
-            "@keyframes pulse": {
-              "0%": {
-                transform: "translate(-50%, -50%) scale(1)",
-                opacity: 1,
-              },
-              "50%": {
-                transform: "translate(-50%, -50%) scale(1.1)",
-                opacity: 0.7,
-              },
-              "100%": {
-                transform: "translate(-50%, -50%) scale(1)",
-                opacity: 1,
-              },
-            },
             "&::before": {
               content: '""',
               position: "absolute",
@@ -604,7 +654,6 @@ const ARViewer = ({ wallArtData, onClose }) => {
               width: 4,
               height: 40,
               backgroundColor: "#fff",
-              boxShadow: "0 0 10px rgba(0,0,0,0.5)",
             },
             "&::after": {
               content: '""',
@@ -615,7 +664,6 @@ const ARViewer = ({ wallArtData, onClose }) => {
               width: 40,
               height: 4,
               backgroundColor: "#fff",
-              boxShadow: "0 0 10px rgba(0,0,0,0.5)",
             },
           }}
         />
