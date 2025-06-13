@@ -14,6 +14,8 @@ const ARViewer = ({ wallArtData, onClose }) => {
   const frameRef = useRef(null)
   const animationFrameRef = useRef(null)
   const touchStartRef = useRef({ x: 0, y: 0 })
+  const raycasterRef = useRef(new THREE.Raycaster())
+  const mouseRef = useRef(new THREE.Vector2())
 
   const [isPlaced, setIsPlaced] = useState(false)
   const [scale, setScale] = useState(1)
@@ -22,10 +24,24 @@ const ARViewer = ({ wallArtData, onClose }) => {
   const [isDragging, setIsDragging] = useState(false)
   const [framePosition, setFramePosition] = useState({ x: 0, y: 0, z: -2 })
   const [error, setError] = useState(null)
+  const [debug, setDebug] = useState("")
 
   useEffect(() => {
     startCamera()
+
+    // Handle window resize
+    const handleResize = () => {
+      if (cameraRef.current && rendererRef.current) {
+        cameraRef.current.aspect = window.innerWidth / window.innerHeight
+        cameraRef.current.updateProjectionMatrix()
+        rendererRef.current.setSize(window.innerWidth, window.innerHeight)
+      }
+    }
+
+    window.addEventListener("resize", handleResize)
+
     return () => {
+      window.removeEventListener("resize", handleResize)
       cleanup()
     }
   }, [])
@@ -34,7 +50,11 @@ const ARViewer = ({ wallArtData, onClose }) => {
     try {
       console.log("Starting camera...")
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
+        video: {
+          facingMode: "environment",
+          width: { ideal: window.innerWidth },
+          height: { ideal: window.innerHeight },
+        },
       })
 
       if (videoRef.current) {
@@ -58,7 +78,12 @@ const ARViewer = ({ wallArtData, onClose }) => {
       setError(`Camera error: ${error.message}`)
       // Try with any camera as fallback
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true })
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: window.innerWidth },
+            height: { ideal: window.innerHeight },
+          },
+        })
         if (videoRef.current) {
           videoRef.current.srcObject = stream
           videoRef.current.onloadedmetadata = () => {
@@ -91,10 +116,13 @@ const ARViewer = ({ wallArtData, onClose }) => {
     const renderer = new THREE.WebGLRenderer({
       canvas: canvasRef.current,
       alpha: true,
+      antialias: true,
     })
 
     renderer.setSize(window.innerWidth, window.innerHeight)
     renderer.setClearColor(0x000000, 0)
+    renderer.shadowMap.enabled = true
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap
 
     sceneRef.current = scene
     rendererRef.current = renderer
@@ -106,6 +134,7 @@ const ARViewer = ({ wallArtData, onClose }) => {
 
     const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8)
     directionalLight.position.set(5, 5, 5)
+    directionalLight.castShadow = true
     scene.add(directionalLight)
 
     // Create frame
@@ -136,6 +165,8 @@ const ARViewer = ({ wallArtData, onClose }) => {
       metalness: 0.1,
     })
     const frameMesh = new THREE.Mesh(frameGeometry, frameMaterial)
+    frameMesh.castShadow = true
+    frameMesh.receiveShadow = true
     group.add(frameMesh)
 
     // Picture
@@ -175,9 +206,9 @@ const ARViewer = ({ wallArtData, onClose }) => {
     if (!canvas) return
 
     // Touch events
-    canvas.addEventListener("touchstart", handleTouchStart)
-    canvas.addEventListener("touchmove", handleTouchMove)
-    canvas.addEventListener("touchend", handleTouchEnd)
+    canvas.addEventListener("touchstart", handleTouchStart, { passive: false })
+    canvas.addEventListener("touchmove", handleTouchMove, { passive: false })
+    canvas.addEventListener("touchend", handleTouchEnd, { passive: false })
 
     // Mouse events (for testing on desktop)
     canvas.addEventListener("mousedown", handleMouseDown)
@@ -194,10 +225,22 @@ const ARViewer = ({ wallArtData, onClose }) => {
     const touch = event.touches[0]
     touchStartRef.current = { x: touch.clientX, y: touch.clientY }
 
+    // Convert touch to normalized device coordinates
+    const rect = canvasRef.current.getBoundingClientRect()
+    mouseRef.current.x = ((touch.clientX - rect.left) / rect.width) * 2 - 1
+    mouseRef.current.y = -((touch.clientY - rect.top) / rect.height) * 2 + 1
+
     if (!isPlaced) {
       handlePlace()
     } else {
-      setIsDragging(true)
+      // Check if we're touching the frame
+      raycasterRef.current.setFromCamera(mouseRef.current, cameraRef.current)
+      const intersects = raycasterRef.current.intersectObject(frameRef.current, true)
+
+      if (intersects.length > 0) {
+        setDebug("Touched frame!")
+        setIsDragging(true)
+      }
     }
   }
 
@@ -206,24 +249,39 @@ const ARViewer = ({ wallArtData, onClose }) => {
     event.preventDefault()
 
     const touch = event.touches[0]
+
+    // Calculate movement in screen space
     const deltaX = (touch.clientX - touchStartRef.current.x) * 0.01
     const deltaY = (touch.clientY - touchStartRef.current.y) * -0.01
 
     // Update frame position
-    const newPosition = {
-      x: frameRef.current.position.x + deltaX,
-      y: frameRef.current.position.y + deltaY,
-      z: frameRef.current.position.z,
-    }
+    frameRef.current.position.x += deltaX
+    frameRef.current.position.y += deltaY
 
-    frameRef.current.position.set(newPosition.x, newPosition.y, newPosition.z)
-    setFramePosition(newPosition)
+    // Update position state
+    setFramePosition({
+      x: frameRef.current.position.x,
+      y: frameRef.current.position.y,
+      z: frameRef.current.position.z,
+    })
+
+    // Visual feedback during dragging
+    frameRef.current.rotation.x = deltaY * 0.2
+    frameRef.current.rotation.y = -deltaX * 0.2
 
     // Update touch start for next move
     touchStartRef.current = { x: touch.clientX, y: touch.clientY }
+
+    setDebug(`Moving: ${deltaX.toFixed(2)}, ${deltaY.toFixed(2)}`)
   }
 
   const handleTouchEnd = () => {
+    if (isDragging && frameRef.current) {
+      // Smooth return to normal rotation
+      frameRef.current.rotation.x = 0
+      frameRef.current.rotation.y = 0
+      frameRef.current.rotation.z = rotation
+    }
     setIsDragging(false)
   }
 
@@ -231,34 +289,58 @@ const ARViewer = ({ wallArtData, onClose }) => {
   const handleMouseDown = (event) => {
     touchStartRef.current = { x: event.clientX, y: event.clientY }
 
+    // Convert mouse to normalized device coordinates
+    const rect = canvasRef.current.getBoundingClientRect()
+    mouseRef.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+    mouseRef.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+
     if (!isPlaced) {
       handlePlace()
     } else {
-      setIsDragging(true)
+      // Check if we're clicking the frame
+      raycasterRef.current.setFromCamera(mouseRef.current, cameraRef.current)
+      const intersects = raycasterRef.current.intersectObject(frameRef.current, true)
+
+      if (intersects.length > 0) {
+        setDebug("Clicked frame!")
+        setIsDragging(true)
+      }
     }
   }
 
   const handleMouseMove = (event) => {
     if (!isDragging || !isPlaced || !frameRef.current) return
 
+    // Calculate movement in screen space
     const deltaX = (event.clientX - touchStartRef.current.x) * 0.01
     const deltaY = (event.clientY - touchStartRef.current.y) * -0.01
 
     // Update frame position
-    const newPosition = {
-      x: frameRef.current.position.x + deltaX,
-      y: frameRef.current.position.y + deltaY,
-      z: frameRef.current.position.z,
-    }
+    frameRef.current.position.x += deltaX
+    frameRef.current.position.y += deltaY
 
-    frameRef.current.position.set(newPosition.x, newPosition.y, newPosition.z)
-    setFramePosition(newPosition)
+    // Update position state
+    setFramePosition({
+      x: frameRef.current.position.x,
+      y: frameRef.current.position.y,
+      z: frameRef.current.position.z,
+    })
+
+    // Visual feedback during dragging
+    frameRef.current.rotation.x = deltaY * 0.2
+    frameRef.current.rotation.y = -deltaX * 0.2
 
     // Update mouse position for next move
     touchStartRef.current = { x: event.clientX, y: event.clientY }
   }
 
   const handleMouseUp = () => {
+    if (isDragging && frameRef.current) {
+      // Smooth return to normal rotation
+      frameRef.current.rotation.x = 0
+      frameRef.current.rotation.y = 0
+      frameRef.current.rotation.z = rotation
+    }
     setIsDragging(false)
   }
 
@@ -268,7 +350,7 @@ const ARViewer = ({ wallArtData, onClose }) => {
     // Add subtle floating animation when not dragging
     if (frameRef.current && isPlaced && !isDragging) {
       const time = Date.now() * 0.001
-      frameRef.current.rotation.y = Math.sin(time * 0.5) * 0.05
+      frameRef.current.rotation.y = Math.sin(time * 0.5) * 0.05 + rotation
     }
 
     if (rendererRef.current && sceneRef.current && cameraRef.current) {
@@ -281,7 +363,25 @@ const ARViewer = ({ wallArtData, onClose }) => {
     setIsPlaced(true)
     if (frameRef.current) {
       frameRef.current.visible = true
+
+      // Position in front of camera
       frameRef.current.position.set(0, 0, -2)
+
+      // Add a small animation when placing
+      frameRef.current.scale.set(0.1, 0.1, 0.1)
+
+      // Animate to full size
+      const targetScale = scale
+      const animateScale = () => {
+        const currentScale = frameRef.current.scale.x
+        if (currentScale < targetScale) {
+          const newScale = Math.min(currentScale * 1.2, targetScale)
+          frameRef.current.scale.set(newScale, newScale, newScale)
+          requestAnimationFrame(animateScale)
+        }
+      }
+
+      animateScale()
     }
   }
 
@@ -312,6 +412,28 @@ const ARViewer = ({ wallArtData, onClose }) => {
       frameRef.current.scale.setScalar(1)
       frameRef.current.rotation.z = 0
       frameRef.current.position.set(0, 0, -2)
+    }
+  }
+
+  const handleMoveCloser = () => {
+    if (frameRef.current) {
+      frameRef.current.position.z += 0.5
+      setFramePosition({
+        x: frameRef.current.position.x,
+        y: frameRef.current.position.y,
+        z: frameRef.current.position.z,
+      })
+    }
+  }
+
+  const handleMoveFarther = () => {
+    if (frameRef.current) {
+      frameRef.current.position.z -= 0.5
+      setFramePosition({
+        x: frameRef.current.position.x,
+        y: frameRef.current.position.y,
+        z: frameRef.current.position.z,
+      })
     }
   }
 
@@ -440,6 +562,25 @@ const ARViewer = ({ wallArtData, onClose }) => {
         <Typography variant="caption">{cameraStarted ? "📹 Camera Active" : "📷 Starting..."}</Typography>
       </Box>
 
+      {/* Debug Info */}
+      {debug && (
+        <Box
+          sx={{
+            position: "absolute",
+            top: 60,
+            left: 20,
+            backgroundColor: "rgba(0,0,0,0.7)",
+            color: "white",
+            px: 2,
+            py: 1,
+            borderRadius: 2,
+            zIndex: 10,
+          }}
+        >
+          <Typography variant="caption">{debug}</Typography>
+        </Box>
+      )}
+
       {/* Place Button */}
       {!isPlaced && cameraStarted && (
         <Paper
@@ -481,7 +622,7 @@ const ARViewer = ({ wallArtData, onClose }) => {
             🎨 Adjust Your Artwork
           </Typography>
 
-          <Box sx={{ display: "flex", justifyContent: "space-around", gap: 1 }}>
+          <Box sx={{ display: "flex", justifyContent: "space-around", gap: 1, mb: 2 }}>
             <Fab size="small" onClick={() => handleScale("down")} color="primary">
               <Remove />
             </Fab>
@@ -496,8 +637,17 @@ const ARViewer = ({ wallArtData, onClose }) => {
             </Fab>
           </Box>
 
+          <Box sx={{ display: "flex", justifyContent: "center", gap: 2 }}>
+            <Button variant="outlined" size="small" onClick={handleMoveCloser}>
+              Closer
+            </Button>
+            <Button variant="outlined" size="small" onClick={handleMoveFarther}>
+              Farther
+            </Button>
+          </Box>
+
           <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block", textAlign: "center" }}>
-            Drag the artwork to move it around
+            Touch the artwork and drag to move it
           </Typography>
         </Paper>
       )}
@@ -518,7 +668,7 @@ const ARViewer = ({ wallArtData, onClose }) => {
             textAlign: "center",
           }}
         >
-          <Typography variant="body2">👆 Touch and drag to move the artwork</Typography>
+          <Typography variant="body2">👆 Touch the artwork directly to move it</Typography>
         </Box>
       )}
 
