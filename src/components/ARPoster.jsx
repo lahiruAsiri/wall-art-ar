@@ -10,6 +10,12 @@ const ARPoster = ({ posterImage, markerPattUrl, markerImageUrl }) => {
   const isMobile = useMediaQuery({ query: '(max-width: 768px)' });
 
   useEffect(() => {
+    // Load AR.js script dynamically
+    const arjsScript = document.createElement('script');
+    arjsScript.src = 'https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js';
+    arjsScript.async = true;
+    document.head.appendChild(arjsScript);
+
     // Check WebGL support
     const canvas = document.createElement('canvas');
     const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
@@ -21,14 +27,31 @@ const ARPoster = ({ posterImage, markerPattUrl, markerImageUrl }) => {
     if (!navigator.mediaDevices) {
       alert('WebRTC is not supported.');
     }
+
+    // Debug AR.js initialization
+    arjsScript.onload = () => {
+      console.log('AR.js script loaded');
+    };
+    arjsScript.onerror = () => {
+      console.error('Failed to load AR.js script');
+    };
+
+    return () => {
+      document.head.removeChild(arjsScript);
+    };
   }, []);
 
   const handleStartAR = () => {
     setArActive(true);
-    navigator.mediaDevices.getUserMedia({ video: true }).catch((err) => {
-      alert('Camera access denied: ' + err.message);
-      setArActive(false);
-    });
+    navigator.mediaDevices.getUserMedia({ video: true })
+      .then(() => {
+        console.log('Camera access granted');
+      })
+      .catch((err) => {
+        console.error('Camera access denied:', err.message);
+        alert('Camera access denied: ' + err.message);
+        setArActive(false);
+      });
   };
 
   if (!isMobile) {
@@ -70,7 +93,7 @@ const ARPoster = ({ posterImage, markerPattUrl, markerImageUrl }) => {
         <div className="ar-container">
           <a-scene
             embedded
-            arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix; matrixCodeType: 3x3;"
+            arjs="sourceType: webcam; debugUIEnabled: true; detectionMode: mono_and_matrix; matrixCodeType: 3x3;"
             vr-mode-ui="enabled: false"
           >
             <a-marker
