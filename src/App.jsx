@@ -3,9 +3,9 @@ import { Container, Typography } from '@mui/material';
 import ARPoster from './components/ARPoster';
 
 function App() {
-  const posterImage = 'src/assets/poster.png'; // Path to your poster image
-  const markerPattUrl = 'src/assets/custom.patt';
-  const markerImageUrl = 'src/assets/custom-marker.png';
+  const posterImage = '/poster.png'; // Path to your poster image
+  const markerPattUrl = '/custom.patt';
+  const markerImageUrl = '/custom-marker.png';
 
   return (
     <Container maxWidth="sm">
