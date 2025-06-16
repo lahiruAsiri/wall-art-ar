@@ -1,38 +1,24 @@
-import { ThemeProvider, createTheme } from "@mui/material/styles"
-import CssBaseline from "@mui/material/CssBaseline"
-import Container from "@mui/material/Container"
-import Box from "@mui/material/Box"
-import Typography from "@mui/material/Typography"
-import ImageDisplay from "./components/ImageDisplay"
-
-const theme = createTheme({
-  palette: {
-    primary: {
-      main: "#1976d2",
-    },
-    secondary: {
-      main: "#dc004e",
-    },
-  },
-})
+import React from 'react';
+import { Container, Typography } from '@mui/material';
+import ARPoster from './components/ARPoster';
 
 function App() {
+  const posterImage = '/assets/poster.png';
+  const markerPattUrl = '/assets/custom.patt';
+  const markerImageUrl = '/assets/custom-marker.png';
+
   return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
-      <Container maxWidth="md">
-        <Box sx={{ py: 4 }}>
-          <Typography variant="h3" component="h1" gutterBottom align="center">
-            AR Wall Art Demo
-          </Typography>
-          <Typography variant="h6" component="p" gutterBottom align="center" color="text.secondary">
-            See how your wall art looks on your wall with AR
-          </Typography>
-          <ImageDisplay />
-        </Box>
-      </Container>
-    </ThemeProvider>
-  )
+    <Container maxWidth="sm">
+      <Typography variant="h4" align="center" sx={{ mt: 4, mb: 2 }}>
+        Poster AR Preview
+      </Typography>
+      <ARPoster
+        posterImage={posterImage}
+        markerPattUrl={markerPattUrl}
+        markerImageUrl={markerImageUrl}
+      />
+    </Container>
+  );
 }
 
-export default App
+export default App;
